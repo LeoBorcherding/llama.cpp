@@ -488,7 +488,9 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=2) as pool:
         source_digests = list(pool.map(lambda j: source_digest(j[0], j[2]), source_jobs))
     for (name, kind, _url), digest in zip(source_jobs, source_digests):
-        sha_artifacts[name] = base_entry(kind, source_repo, digest)
+        # A dist/ copy is the stamped tree published here, not source_repo's codeload bytes.
+        repo = args.publish_repo if (args.dist / name).is_file() else source_repo
+        sha_artifacts[name] = base_entry(kind, repo, digest)
 
     # 4) manifest, then hash it into the index. Both sidecars share the same
     #    source-description header; merged_prs records the exact pinned PR SHAs
