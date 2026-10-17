@@ -16,8 +16,15 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
     const std::string END_SAMPLING = "<|content_model_end_sampling|>";
     const std::string INVOKE_TOOL  = "<|content_invoke_tool_json|>";
 
-    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
-    data.generation_prompt  = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    // the template ignores enable_thinking and defaults to effort 0.9, so thinking off is effort none
+    std::optional<json> additional_context;
+    if (!inputs.enable_thinking &&
+        !(inputs.extra_context.is_object() && inputs.extra_context.contains("reasoning_effort"))) {
+        additional_context = json{ { "reasoning_effort", "none" } };
+    }
+
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs, std::nullopt, std::nullopt, additional_context);
+    data.generation_prompt  = common_chat_template_generation_prompt_impl(tmpl, inputs, std::nullopt, std::nullopt, additional_context);
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.thinking_start_tag = THINK;
@@ -40,9 +47,16 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
 
-        data.generation_prompt = MSG_MODEL + THINK + msg.reasoning_content;
+        // match the template: every block re-opens with MSG_MODEL, no thinking block without reasoning
+        data.generation_prompt = MSG_MODEL;
+        if (!msg.reasoning_content.empty() || inputs.continue_final_message == COMMON_CHAT_CONTINUATION_REASONING) {
+            data.generation_prompt += THINK + msg.reasoning_content;
+            if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+                data.generation_prompt += END_MESSAGE + MSG_MODEL;
+            }
+        }
         if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
-            data.generation_prompt += END_MESSAGE + TEXT + msg.render_content();
+            data.generation_prompt += TEXT + msg.render_content();
         }
 
         data.prompt.append(data.generation_prompt);
