@@ -8596,6 +8596,25 @@ struct test_flash_attn_ext_banded : public test_case {
     }
 };
 
+// nonzero-mean V at long n_kv: an fp16 VKQ accumulator drops increments once the running sum is large,
+// which zero-mean V can't show. GGML_PREC_F32 is requested, so hold it to the F32 tolerance.
+struct test_flash_attn_ext_banded_v_offset : public test_flash_attn_ext_banded {
+    using test_flash_attn_ext_banded::test_flash_attn_ext_banded;
+
+    std::string vars() override {
+        return test_flash_attn_ext_banded::vars() + ",v=U(900,1100)";
+    }
+
+    double max_nmse_err() override {
+        return 2e-6;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext_banded::initialize_tensors(ctx);
+        init_tensor_uniform(ggml_get_tensor(ctx, "v"), 900.0f, 1100.0f);
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -11897,6 +11916,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 1, 512, 17024, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 1,   1, 17024, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 1, 512, 32768, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_flash_attn_ext_banded_v_offset(128, 8, 1, 512, 131072, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));
 
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1},   512, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1},  4096,  64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));

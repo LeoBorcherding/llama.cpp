@@ -543,6 +543,12 @@ bool ggml_cuda_flash_attn_ext_banded_use_mma(const int device, const ggml_tensor
         return false;
     }
 
+    // the MMA instance accumulates V*softmax in fp16 on NVIDIA, so an F32 request takes the FP32 kernel
+    const ggml_prec prec = ggml_flash_attn_ext_get_prec(dst);
+    if (prec != GGML_PREC_UNDEFINED && prec <= GGML_PREC_F32) {
+        return false;
+    }
+
     const ggml_tensor * Q   = dst->src[0];
     const ggml_tensor * K   = dst->src[1];
     const ggml_tensor * V   = dst->src[2];
