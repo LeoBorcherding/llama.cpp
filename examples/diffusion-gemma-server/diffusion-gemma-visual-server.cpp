@@ -169,12 +169,15 @@ int main(int argc, char ** argv) {
         c.n_batch = (uint32_t) n;
         // chunked causal prefill: keep n_head*chunk*n_kv under 2^31 (CUDA softcap is 32-bit indexed)
         const int chunk = (int) std::clamp<int64_t>((int64_t(1) << 30) / (int64_t(n_head) * n), 256, 2048);
-        c.n_ubatch = (uint32_t) std::min(n, chunk);
+        // without the prompt-KV cache [prompt|canvas] is one non-causal encode, which needs n_ubatch >= n
+        c.n_ubatch = (uint32_t) (one_gpu ? std::min(n, chunk) : n);
         c.n_outputs_max = (uint32_t) canvas_length;   // only the canvas rows need logits
         c.no_perf = true;
         c.flash_attn_type = fa_on ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         return c;
     };
+    // the uncached forward is one [n_head, n, n] scores tensor: hold it to the same 2^31 bound
+    auto fits_uncached = [&](int n) { return one_gpu || int64_t(n_head) * n * n < (int64_t(1) << 31); };
 
     // Resolve MAXTOK + create the context. A descending probe keeps the largest context that actually
     // allocates. The model can spill to system RAM (NGL exceeds what fits VRAM), so when the VRAM-gated
@@ -209,6 +212,7 @@ int main(int argc, char ** argv) {
             if (raw > ceil_ctx) continue;
             int N = (int) ((raw / canvas_length) * canvas_length);   // whole canvases only
             if (N < floor_ctx) break;
+            if (!fits_uncached(N)) continue;
             if (budget) {   // an fp32 [n_head, N, N] scores buffer is unavoidable (FA off): skip if it can't fit
                 const double min_scores = (double) n_head * (double) N * (double) N * 4.0;
                 if (min_scores > (double) budget * 0.9) continue;
@@ -232,7 +236,7 @@ int main(int argc, char ** argv) {
     if (MAXTOK_ENV > 0) {   // explicit budget: honour exactly if it fits, else degrade through the probe
         const double sc = (double) n_head * (double) MAXTOK_ENV * (double) MAXTOK_ENV * 4.0;
         const size_t budget = std::max(v_free, ram_budget);
-        if (!budget || sc <= (double) budget * 0.9) {
+        if (fits_uncached(MAXTOK_ENV) && (!budget || sc <= (double) budget * 0.9)) {
             ctx = llama_init_from_model(model, make_cparams(MAXTOK_ENV));
             if (ctx) { MAXTOK = MAXTOK_ENV; reason = "requested"; }
         }
