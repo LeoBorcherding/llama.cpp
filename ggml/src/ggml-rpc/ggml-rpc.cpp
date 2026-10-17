@@ -424,9 +424,12 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     bool status = send_rpc_cmd(sock, RPC_CMD_HELLO, &request, sizeof(request), &response, sizeof(response));
     RPC_STATUS_ASSERT(status);
 
-    if (response.major != RPC_PROTO_MAJOR_VERSION || response.minor > RPC_PROTO_MINOR_VERSION) {
-        LOG_ERROR("RPC server version mismatch: %d.%d.%d\n",
-                       response.major, response.minor, response.patch);
+    // op numbers only line up when minor and patch match too (patch tracks GGML_OP_COUNT)
+    if (response.major != RPC_PROTO_MAJOR_VERSION || response.minor != RPC_PROTO_MINOR_VERSION ||
+        response.patch != RPC_PROTO_PATCH_VERSION) {
+        LOG_ERROR("RPC server version mismatch: %d.%d.%d, client is %d.%d.%d\n",
+                       response.major, response.minor, response.patch,
+                       RPC_PROTO_MAJOR_VERSION, RPC_PROTO_MINOR_VERSION, RPC_PROTO_PATCH_VERSION);
         return false;
     }
 

@@ -7,7 +7,8 @@ extern "C" {
 #endif
 
 #define RPC_PROTO_MAJOR_VERSION    8
-#define RPC_PROTO_MINOR_VERSION    0
+// minor 1: GGML_OP_FLASH_ATTN_EXT_BANDED renumbers the ops after it, and stock clients refuse a newer minor
+#define RPC_PROTO_MINOR_VERSION    1
 #define RPC_PROTO_PATCH_VERSION    1
 
 #ifdef  __cplusplus
