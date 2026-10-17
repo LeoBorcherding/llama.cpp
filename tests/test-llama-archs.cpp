@@ -577,6 +577,51 @@ static std::vector<float> get_logits(
     return ret;
 }
 
+static bool inkling_kq_b_cb(struct ggml_tensor * t, bool ask, void * user_data) {
+    if (ask && strncmp(t->name, "inkling_kq_b", strlen("inkling_kq_b")) == 0) {
+        *(bool *) user_data = true;
+    }
+    return false;
+}
+
+// Inkling's reserve sizes only the banded flash-attention path, so a decode that builds the dense
+// inkling_kq_b bias runs on memory nobody reserved. The second slot of a unified cache must stay banded
+static bool check_inkling_banded_second_slot(llama_model * model, const std::vector<llama_token> & tokens) {
+    bool dense = false;
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx             = 256;
+    ctx_params.n_ubatch          = 64;
+    ctx_params.n_seq_max         = 2;
+    ctx_params.kv_unified        = true;
+    ctx_params.flash_attn_type   = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    ctx_params.cb_eval           = inkling_kq_b_cb;
+    ctx_params.cb_eval_user_data = &dense;
+    llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
+    if (!lctx) {
+        throw std::runtime_error("failed to create llama context");
+    }
+
+    const int32_t n = 16;
+    GGML_ASSERT(tokens.size() >= (size_t) n);
+    for (llama_seq_id seq : { 0, 1 }) {
+        dense = false;
+        common_batch batch(lctx.get());
+        for (int32_t pos = 0; pos < n; pos++) {
+            batch.add(tokens[pos], pos, seq, pos == n - 1);
+        }
+        if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+            throw std::runtime_error("failed to decode batch");
+        }
+        if (dense) {
+            LOG_ERR("%s: sequence %d of a unified cache built the dense inkling_kq_b bias instead of the banded path\n",
+                    __func__, seq);
+            return false;
+        }
+    }
+    return true;
+}
+
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
 // returns the llama_process() error code
 static int32_t get_logits_mixed(
@@ -1067,6 +1112,11 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                                     status_mixed = "\033[1;31mFAIL\033[0m";
                                 }
                             }
+                        }
+
+                        if (arch == LLM_ARCH_INKLING && !check_inkling_banded_second_slot(model_and_ctx_dev.first.get(), tokens)) {
+                            test_ok = false;
+                            status_nmse = "\033[1;31mFAIL\033[0m (banded)";
                         }
 
                         // runs after the mixed batch check, as it leaves the context with non-causal attention
