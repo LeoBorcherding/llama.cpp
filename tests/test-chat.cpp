@@ -3059,6 +3059,24 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 { "python", "{\"code\": \"print('hey')\"}", "" },
             })
             .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?<|end_message|><|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test("world!\nWhat's up?<|end_message|><|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, simple_assist_msg("Hello, ") })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
     }
 
     {
@@ -7644,6 +7662,32 @@ static void test_template_generation_prompt() {
         check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
         check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
         check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+    }
+
+    {
+        // TML re-opens every block with <|message_model|> and only emits a thinking block when there is reasoning
+        auto tmpls = read_templates("models/templates/Inkling.jinja");
+        check(tmpls, basic(),                  "<|message_model|>");
+        check(tmpls, continuation_content(),   "<|message_model|><|content_thinking|>I'm thinking<|end_message|><|message_model|><|content_text|>Hello, ");
+        check(tmpls, continuation_reasoning(), "<|message_model|><|content_thinking|>I'm");
+
+        auto continuation_content_no_reasoning = continuation_content();
+        continuation_content_no_reasoning.messages = { system_msg, message_user, simple_assist_msg("Hello, ") };
+        check(tmpls, continuation_content_no_reasoning, "<|message_model|><|content_text|>Hello, ");
+
+        // the template defaults to effort 0.9 and ignores enable_thinking
+        common_chat_templates_inputs effort_inputs;
+        effort_inputs.messages = { system_msg, message_user };
+        assert_contains(common_chat_templates_apply(tmpls.get(), effort_inputs).prompt.str(),
+                        "Thinking effort level: 0.9<|end_message|>");
+
+        effort_inputs.enable_thinking = false;
+        assert_contains(common_chat_templates_apply(tmpls.get(), effort_inputs).prompt.str(),
+                        "Thinking effort level: 0<|end_message|>");
+
+        effort_inputs.chat_template_kwargs["reasoning_effort"] = R"("low")";
+        assert_contains(common_chat_templates_apply(tmpls.get(), effort_inputs).prompt.str(),
+                        "Thinking effort level: 0.2<|end_message|>");
     }
 }
 
