@@ -645,6 +645,13 @@ extern "C" {
             const struct llama_model * model,
                               bool      use_f16);
 
+    // DiffusionGemma: allocate the prompt-KV store for a P-token prompt before PREFILL, at the type ctx's
+    // graph will use. Returns false when the allocation fails, so the caller can fail the request instead
+    // of aborting inside llama_decode. true (no-op) for other models.
+    LLAMA_API bool llama_diffusion_reserve_pkv(
+            struct llama_context * ctx,
+                         int32_t   P);
+
     LLAMA_API int32_t llama_model_n_ctx_train  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);

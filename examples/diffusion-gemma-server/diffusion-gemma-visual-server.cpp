@@ -163,6 +163,8 @@ int main(int argc, char ** argv) {
 
     const bool fa_on  = getenv("FA") && atoi(getenv("FA"));
     const int  n_head = std::max(1, (int) llama_model_n_head(model));
+    // the prompt-KV store (on with one GPU) grows to MAXTOK tokens after the context exists, so budget it too
+    const size_t pkv_bpt = one_gpu ? llama_diffusion_pkv_bytes_per_token(model, fa_on) : 0;
     auto make_cparams = [&](int n) {
         llama_context_params c = llama_context_default_params();
         c.n_ctx   = (uint32_t) n;
@@ -211,13 +213,13 @@ int main(int argc, char ** argv) {
             if (N < floor_ctx) break;
             if (budget) {   // an fp32 [n_head, N, N] scores buffer is unavoidable (FA off): skip if it can't fit
                 const double min_scores = (double) n_head * (double) N * (double) N * 4.0;
-                if (min_scores > (double) budget * 0.9) continue;
+                if (min_scores + (double) N * pkv_bpt > (double) budget * 0.9) continue;
             }
             llama_context * c = llama_init_from_model(model, make_cparams(N));
             if (!c) continue;
             if (gpu_headroom && gpu_dev) {
                 size_t f = 0, t = 0; ggml_backend_dev_memory(gpu_dev, &f, &t);
-                if (f < gpu_headroom) { llama_free(c); continue; }
+                if (f < gpu_headroom + (size_t) N * pkv_bpt) { llama_free(c); continue; }
             }
             *out_n = N;
             return c;
@@ -230,7 +232,8 @@ int main(int argc, char ** argv) {
     const char * reason = "auto";
 
     if (MAXTOK_ENV > 0) {   // explicit budget: honour exactly if it fits, else degrade through the probe
-        const double sc = (double) n_head * (double) MAXTOK_ENV * (double) MAXTOK_ENV * 4.0;
+        const double sc = (double) n_head * (double) MAXTOK_ENV * (double) MAXTOK_ENV * 4.0 +
+                          (double) MAXTOK_ENV * pkv_bpt;
         const size_t budget = std::max(v_free, ram_budget);
         if (!budget || sc <= (double) budget * 0.9) {
             ctx = llama_init_from_model(model, make_cparams(MAXTOK_ENV));
