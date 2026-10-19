@@ -495,7 +495,8 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
         // Chunked causal PREFILL: feed the prompt in ubatch-sized chunks, each writing its K/V to the store and
         // attending causally over the prefix. Keeps n_tokens <= n_ubatch, so the buffer tracks the chunk, not the prompt.
         const int32_t U = std::max(1, (int32_t) llama_n_ubatch(ctx));
-        bool prefill_ok = true;
+        // allocate the store here, where a failure can fail the request (in the PREFILL graph it aborts)
+        bool prefill_ok = llama_diffusion_reserve_pkv(ctx, n_input);
         for (int32_t s = 0; s < n_input && prefill_ok; s += U) {
             const int32_t u = std::min(U, n_input - s);
             llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, n_input, /*off=*/s);

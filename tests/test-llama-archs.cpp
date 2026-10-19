@@ -12,6 +12,7 @@
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -581,6 +582,31 @@ static std::vector<float> get_logits(
     return ret;
 }
 
+// llama_diffusion_reserve_pkv must report a prompt-KV store it can't allocate instead of aborting,
+// and a PREFILL after a successful reserve must run on the reserved store
+static void test_diffusion_pkv_reserve(llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
+    // INT32_MAX prompt tokens is terabytes of store, past what any host will hand out
+    if (llama_diffusion_reserve_pkv(lctx, INT32_MAX)) {
+        LOG_WRN("%s: the host allocated an INT32_MAX-token prompt-KV store, the failure path did not run\n", __func__);
+    }
+
+    const int32_t P = 32;
+    GGML_ASSERT(tokens.size() >= (size_t) P);
+    if (!llama_diffusion_reserve_pkv(lctx, P)) {
+        throw std::runtime_error("failed to reserve a 32-token prompt-KV store");
+    }
+    common_batch batch(lctx);
+    for (int32_t pos = 0; pos < P; pos++) {
+        batch.add(tokens[pos], pos, 0, pos == P - 1);
+    }
+    llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, P, /*off=*/0);
+    const int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+    llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
+    if (ret != 0) {
+        throw std::runtime_error("PREFILL on the reserved prompt-KV store failed");
+    }
+}
+
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
 // returns the llama_process() error code
 static int32_t get_logits_mixed(
@@ -1028,6 +1054,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+                        if (arch == LLM_ARCH_DIFFUSION_GEMMA) {
+                            test_diffusion_pkv_reserve(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens);
+                        }
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
                         test_executed = true;

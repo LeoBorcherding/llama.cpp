@@ -163,6 +163,10 @@ int main(int argc, char ** argv) {
 
     const bool fa_on  = getenv("FA") && atoi(getenv("FA"));
     const int  n_head = std::max(1, (int) llama_model_n_head(model));
+    // the prompt-KV store (on with one GPU) grows to MAXTOK tokens after the context exists, so budget it too
+    const size_t pkv_bpt = one_gpu ? llama_diffusion_pkv_bytes_per_token(model, fa_on) : 0;
+    // it sits on layer 0's device, which is the GPU only when NGL offloads every layer
+    const bool pkv_on_gpu = pkv_bpt && gpu_dev && mparams.n_gpu_layers > llama_model_n_layer(model);
     auto make_cparams = [&](int n) {
         llama_context_params c = llama_context_default_params();
         c.n_ctx   = (uint32_t) n;
@@ -211,13 +215,13 @@ int main(int argc, char ** argv) {
             if (N < floor_ctx) break;
             if (budget) {   // an fp32 [n_head, N, N] scores buffer is unavoidable (FA off): skip if it can't fit
                 const double min_scores = (double) n_head * (double) N * (double) N * 4.0;
-                if (min_scores > (double) budget * 0.9) continue;
+                if (min_scores + (double) N * pkv_bpt > (double) budget * 0.9) continue;
             }
             llama_context * c = llama_init_from_model(model, make_cparams(N));
             if (!c) continue;
             if (gpu_headroom && gpu_dev) {
                 size_t f = 0, t = 0; ggml_backend_dev_memory(gpu_dev, &f, &t);
-                if (f < gpu_headroom) { llama_free(c); continue; }
+                if (f < gpu_headroom + (size_t) N * pkv_bpt) { llama_free(c); continue; }
             }
             *out_n = N;
             return c;
@@ -230,7 +234,8 @@ int main(int argc, char ** argv) {
     const char * reason = "auto";
 
     if (MAXTOK_ENV > 0) {   // explicit budget: honour exactly if it fits, else degrade through the probe
-        const double sc = (double) n_head * (double) MAXTOK_ENV * (double) MAXTOK_ENV * 4.0;
+        const double sc = (double) n_head * (double) MAXTOK_ENV * (double) MAXTOK_ENV * 4.0 +
+                          (double) MAXTOK_ENV * pkv_bpt;
         const size_t budget = std::max(v_free, ram_budget);
         if (!budget || sc <= (double) budget * 0.9) {
             ctx = llama_init_from_model(model, make_cparams(MAXTOK_ENV));
@@ -243,7 +248,9 @@ int main(int argc, char ** argv) {
         int n1 = 0;
         ctx = probe(ceil_ctx, v_free, vram_headroom, &n1);       // pass 1: VRAM-gated (unchanged on ample VRAM)
         if (ctx) { MAXTOK = n1; reason = "vram"; }
-        if ((!ctx || n1 < ceil_ctx) && ram_budget > v_free) {    // pass 2: model is RAM-resident -- probe RAM
+        // pass 2: model is RAM-resident -- probe RAM. Not when pass 1 fit and the store is on the GPU: the
+        // RAM budget can't vouch for a store that has to fit in VRAM.
+        if ((!ctx || n1 < ceil_ctx) && ram_budget > v_free && !(ctx && pkv_on_gpu)) {
             int n2 = 0;
             llama_context * c = probe(ceil_ctx, ram_budget, 0, &n2);
             if (c && n2 > MAXTOK) { if (ctx) llama_free(ctx); ctx = c; MAXTOK = n2; reason = "ram"; }
