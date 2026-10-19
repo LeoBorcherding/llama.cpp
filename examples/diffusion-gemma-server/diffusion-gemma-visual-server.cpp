@@ -256,7 +256,8 @@ int main(int argc, char ** argv) {
     }
     if (!ctx) {   // last resort: the floor so a very tight machine still loads
         int N = std::max((int) canvas_length, (int) ((floor_ctx / canvas_length) * canvas_length));
-        ctx = llama_init_from_model(model, make_cparams(N));
+        while (N > (int) canvas_length && !fits_uncached(N)) N -= (int) canvas_length;
+        if (fits_uncached(N)) ctx = llama_init_from_model(model, make_cparams(N));
         if (ctx) { MAXTOK = N; reason = "floor"; }
     }
     if (!ctx) {
