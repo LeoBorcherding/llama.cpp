@@ -121,6 +121,12 @@ ROCM_TARGET_MAP = {
     "gfx103X": ["gfx1030", "gfx1031", "gfx1032", "gfx1034"],
     "gfx90a": ["gfx90a"],
     "gfx908": ["gfx908"],
+    # Windows only: the three RDNA dGPU families in one bundle, for hosts that mix them.
+    "gfxmulti": [
+        "gfx1030", "gfx1031", "gfx1032", "gfx1034",
+        "gfx1100", "gfx1101", "gfx1102", "gfx1103",
+        "gfx1200", "gfx1201",
+    ],
 }
 
 

@@ -464,8 +464,17 @@ jobs:
 
           [ -n "$GFX" ] || { echo "refusing empty gfx_target (would publish a CUDA-only release labeled CUDA + ROCm)" >&2; exit 1; }
           ROCM_MATRIX="$(jq -cn --arg g "$GFX" '{gfx_target: ($g | split(",") | map(gsub("^\\s+|\\s+$"; "")))}')"
+          # Windows-only gfxmulti: one bundle for all three RDNA dGPU families, for hosts mixing them
+          # (RX 7900 XTX + R9700). Built whenever all three are (so publish always carries it) or when
+          # named, which also makes gfx_target=gfxmulti a one-leg test.
+          WANT_MULTI="$(jq -r '.gfx_target | (index("gfxmulti") != null) or (index("gfx103X") != null and index("gfx110X") != null and index("gfx120X") != null)' <<<"$ROCM_MATRIX")"
+          ROCM_MATRIX="$(jq -c '.gfx_target -= ["gfxmulti"]' <<<"$ROCM_MATRIX")"
+          case "$OS_LIST" in *ubuntu*)
+            [ "$(jq '.gfx_target | length' <<<"$ROCM_MATRIX")" -gt 0 ] || { echo "gfx_target=gfxmulti is Windows only; dispatch it with operating_systems=windows" >&2; exit 1; } ;;
+          esac
           # Windows rows carry slices: gfx110X and gfx103X, the slowest ROCm legs, get a warm shard.
-          ROCM_WIN_MATRIX="$(jq -c '{include: [.gfx_target[] as $g | (if ($g == "gfx110X" or $g == "gfx103X") then 2 else 1 end) as $n | range($n) as $s | {gfx_target: $g, slice: $s, slices: $n}]}' <<<"$ROCM_MATRIX")"
+          ROCM_WIN_MATRIX="$(jq -c --argjson multi "$WANT_MULTI" '{include: ([.gfx_target[] as $g | (if ($g == "gfx110X" or $g == "gfx103X") then 2 else 1 end) as $n | range($n) as $s | {gfx_target: $g, slice: $s, slices: $n}]
+            + if $multi then [range(3) as $s | {gfx_target: "gfxmulti", slice: $s, slices: 3}] else [] end)}' <<<"$ROCM_MATRIX")"
 
           # One weekly cutoff for the whole run, before fan-out. See the ROCm child for why it is the Saturday before.
           # Each leg reads its own clock otherwise, so a run crossing the SF Sat-to-Sun boundary would mix two toolchains in one release.
@@ -993,6 +1002,7 @@ jobs:
             [ -s "dist/app-${TAG}-linux-x64-rocm-${gfx}.tar.gz" ] || { echo "ERROR: missing linux rocm ${gfx} bundle in dist/" >&2; fail=1; }
             [ -s "dist/app-${TAG}-windows-x64-rocm-${gfx}.zip" ]  || { echo "ERROR: missing windows rocm ${gfx} bundle in dist/" >&2; fail=1; }
           done
+          [ -s "dist/app-${TAG}-windows-x64-rocm-gfxmulti.zip" ] || { echo "ERROR: missing windows rocm gfxmulti bundle in dist/" >&2; fail=1; }
           [ "$fail" = 0 ] || { echo "ERROR: refusing to publish a partial release" >&2; exit 1; }
 
       - name: Publish GitHub release

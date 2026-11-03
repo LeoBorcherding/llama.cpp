@@ -250,6 +250,10 @@ jobs:
           $archiveTarget = "$currentTarget-all"
           Write-Host "Using target with -all suffix: $archiveTarget"
         }
+        if ($currentTarget -eq "gfxmulti") {
+          # Only TheRock's multiarch dist carries rocBLAS/hipBLASLt kernels for every family.
+          $archiveTarget = "multiarch"
+        }
 
         # The index embeds a JSON `files` array with names and mtimes.
         $baseUrl = "https://nightly.repo.amd.com/rocm/core/tarball"
@@ -399,6 +403,8 @@ jobs:
           set "mapped_target=gfx1150"
         ) else if "%current_target%"=="gfx120X" (
           set "mapped_target=gfx1200;gfx1201"
+        ) else if "%current_target%"=="gfxmulti" (
+          set "mapped_target=gfx1030;gfx1031;gfx1032;gfx1034;gfx1100;gfx1101;gfx1102;gfx1103;gfx1200;gfx1201"
         ) else (
           set "mapped_target=%current_target%"
         )
@@ -654,6 +660,27 @@ jobs:
             Get-ChildItem $destHipblasltPath -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
           } else {
             Write-Host "Warning: rocblas\library folder not found at: $rocblasLibPath"
+          }
+
+          # The multiarch dist ships kernels for every arch TheRock builds; keep only the ones compiled in.
+          if ("${{ matrix.gfx_target }}" -eq "gfxmulti") {
+            $keep = $env:MAPPED_TARGET -split ';'
+            foreach ($lib in @("rocblas\library", "hipblaslt\library")) {
+              $libPath = Join-Path $buildBinPath $lib
+              if (-not (Test-Path $libPath)) { continue }
+              $libRoot = (Resolve-Path $libPath).Path
+              $dropped = 0
+              Get-ChildItem $libRoot -Recurse -File | ForEach-Object {
+                $archs = [regex]::Matches($_.FullName.Substring($libRoot.Length), 'gfx[0-9a-f]{3,4}') | ForEach-Object { $_.Value }
+                if ($archs -and -not ($archs | Where-Object { $keep -contains $_ })) {
+                  Remove-Item $_.FullName -Force
+                  $dropped++
+                }
+              }
+              Get-ChildItem $libRoot -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending |
+                Where-Object { -not (Get-ChildItem $_.FullName -Force) } | Remove-Item -Force
+              Write-Host "${lib}: dropped $dropped files for archs outside $env:MAPPED_TARGET"
+            }
           }
 
           Write-Host "ROCm core files successfully copied to build directory"
