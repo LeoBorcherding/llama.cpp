@@ -2,11 +2,18 @@
 
 #include "ggml-backend.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <vector>
 
 struct llama_model;
+
+struct llama_moe_cache_stats {
+    uint64_t hits   = 0;
+    uint64_t misses = 0;
+    uint64_t bytes  = 0; // uploaded on misses
+};
 
 // keeps the most recently used experts of host-resident MoE layers in a device buffer
 // each layer has a slot map in host memory: when the scheduler copies it to the device, the copy callback uploads the missing experts
@@ -77,6 +84,9 @@ public:
     bool has_seed_counts() const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
+
+    // cumulative stats of the cache lookups, the large batch copies are not included
+    llama_moe_cache_stats get_stats() const;
 
 private:
     struct impl;

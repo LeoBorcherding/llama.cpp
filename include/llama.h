@@ -1688,6 +1688,11 @@ extern "C" {
         int32_t n_reused;   // number of times a ggml compute graph had been reused
         int32_t n_reallocs_same; // number of graph reallocations during inference with an unchanged graph size
         int32_t n_reallocs_diff; // number of graph reallocations during inference with a changed graph size
+
+        // MoE cache lookups (--moe-cache-mib), 0 if the cache is not used
+        uint64_t n_moe_cache_hits;
+        uint64_t n_moe_cache_misses;
+        uint64_t moe_cache_bytes;    // uploaded on misses
     };
 
     struct llama_perf_sampler_data {
