@@ -400,7 +400,10 @@ static __global__ void mm_ids_expert_prefix(
         // the histogram skips out of range ids, and every consumer of the sort needs a complete permutation:
         // stop here, as the host checks of the other paths do, instead of handing on unwritten entries
         if (int64_t(carry) != n_assignments) {
+#if !defined(GGML_USE_HIP)
+            // HIP device printf needs hostcall, which needs PCIe atomics: without them this kernel never launches
             printf("mm_ids: expert id out of range\n");
+#endif // !defined(GGML_USE_HIP)
             __trap();
         }
         expert_bounds[n_experts] = carry;
